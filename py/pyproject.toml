@@ -1,0 +1,21 @@
+[project]
+name = "store-rbac-bootstrap-py"
+version = "0.1.0"
+description = "Optional skin-layer bootstrap for common-store RBAC: policy bootstrap (set_rbac + role-rule configs) and credential-to-context factories (JWT / API-Key / Session) for the context_provider seams of store-api / store-grpc / store-graphql"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["py-store", "rbac", "bootstrap", "context", "jwt", "skin"]
+dependencies = ["PyJWT>=2.8"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
