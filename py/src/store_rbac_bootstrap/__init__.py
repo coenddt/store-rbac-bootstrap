@@ -93,3 +93,127 @@ def create(store, source):
 
 
 policy = SimpleNamespace(file=file, url=url, db=db, create=create)
+
+# ------------------------------------------------------------------ #
+# identity：身份源适配（凭证 → {userId, roles} → 各皮 context_provider 接缝）
+# ------------------------------------------------------------------ #
+
+
+def _headers_to_bag(headers):
+    """普通 Mapping → {lower: 首个字符串值}；非字符串丢弃。"""
+    bag = {}
+    if not headers:
+        return bag
+    for k, v in dict(headers).items():
+        if v is None:
+            continue
+        bag.setdefault(str(k).lower(), v if isinstance(v, str) else str(v))
+    return bag
+
+
+def _metadata_to_bag(invocation_metadata):
+    """gRPC invocation_metadata（(key, value) 序列 或 支持 .get 的对象）→ 同形 bag。"""
+    bag = {}
+    if not invocation_metadata:
+        return bag
+    if hasattr(invocation_metadata, "get") and not isinstance(invocation_metadata, (list, tuple)):
+        # 对象形态：已知键按需取（authorization / x-api-key / cookie）
+        for name in ("authorization", "x-api-key", "cookie"):
+            v = invocation_metadata.get(name)
+            if v:
+                bag[name] = v if isinstance(v, str) else str(v)
+        return bag
+    for item in invocation_metadata:               # (key, value) 序列形态
+        k, v = item[0], item[1]
+        bag.setdefault(str(k).lower(), v if isinstance(v, str) else str(v))
+    return bag
+
+
+def _parse_cookie(cookie_header, name):
+    for part in (cookie_header or "").split(";"):
+        if "=" in part:
+            k, _, v = part.partition("=")
+            if k.strip() == name:
+                return v.strip()
+    return None
+
+
+def jwt(secret, algorithm="HS256", header="authorization",
+        user_id_claim="sub", roles_claim="roles"):
+    if not isinstance(secret, str) or not secret:
+        raise ValueError("identity.jwt 需要非空 secret")
+    if algorithm not in ("HS256", "HS384", "HS512"):
+        raise ValueError(f"identity.jwt 首期仅支持 HS 系算法（收到 {algorithm}）")
+
+    async def decode(bag):
+        raw = bag.get(header.lower())
+        if not raw:
+            return None                            # 无凭证 → None（显式清除）
+        token = raw[7:] if raw.startswith("Bearer ") else raw
+        try:
+            payload = _jwt.decode(token, secret, algorithms=[algorithm])
+        except Exception as exc:                   # 验签失败 / 过期 → 普通错误
+            raise ValueError(f"无效的 JWT 凭证: {exc}") from None
+        user_id = payload.get(user_id_claim)
+        if not isinstance(user_id, str) or not user_id:
+            raise ValueError("JWT 缺非空 userId 声明")
+        roles = payload.get(roles_claim)
+        return {
+            "userId": user_id,
+            "roles": [r for r in roles if isinstance(r, str)] if isinstance(roles, list) else [],
+        }
+
+    return decode
+
+
+def api_key(header="x-api-key", lookup=None):
+    if not callable(lookup):
+        raise ValueError("identity.api_key 需要 lookup 回调")
+
+    async def decode(bag):
+        key = bag.get(header.lower())
+        if not key:
+            return None
+        ctx = lookup(key)
+        if inspect.isawaitable(ctx):
+            ctx = await ctx
+        return None if ctx is None else ctx
+
+    return decode
+
+
+def session(cookie="sid", lookup=None):
+    if not callable(lookup):
+        raise ValueError("identity.session 需要 lookup 回调")
+
+    async def decode(bag):
+        sid = _parse_cookie(bag.get("cookie") or "", cookie)
+        if not sid:
+            return None
+        ctx = lookup(sid)
+        if inspect.isawaitable(ctx):
+            ctx = await ctx
+        return None if ctx is None else ctx
+
+    return decode
+
+
+def adapt(skin, decode):
+    if not callable(decode):
+        raise ValueError("identity.adapt 需要解码器函数")
+    if skin == "store-api":
+        async def provider(request):
+            return await decode(_headers_to_bag(getattr(request, "headers", None)))
+        return provider
+    if skin == "store-grpc":
+        async def provider(invocation_metadata):
+            return await decode(_metadata_to_bag(invocation_metadata))
+        return provider
+    if skin == "store-graphql":
+        async def provider(request):
+            return await decode(_headers_to_bag(getattr(request, "headers", None)))
+        return provider
+    raise ValueError(f"identity.adapt 未知皮名: {skin}")
+
+
+identity = SimpleNamespace(jwt=jwt, api_key=api_key, session=session, adapt=adapt)
