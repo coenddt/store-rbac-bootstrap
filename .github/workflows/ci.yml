@@ -1,0 +1,47 @@
+name: ci
+
+# 双端测试门禁：node(node:test) / python(pytest)。
+#
+# 说明：本插件零宿主依赖（不 require / import 任何宿主 / 皮肤 / core 包），
+#       故 CI 无需克隆 nodejs-store / py-store；首期无 go 端（设计 §6.3）。
+#       node 测试会加载仓根共享语料 conformance/cases.json（随 checkout 一并就位）。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    name: node tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install
+        working-directory: node
+        run: npm install --no-fund --no-audit
+      - name: Test
+        working-directory: node
+        run: npm test
+
+  py:
+    name: python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install
+        working-directory: py
+        run: pip install -e ".[dev]"
+      - name: Test
+        working-directory: py
+        run: python -m pytest -q
