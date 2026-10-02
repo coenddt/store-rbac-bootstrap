@@ -1,0 +1,71 @@
+{
+  "comment": "双端一致性用例：同一份 JSON，node:test 与 pytest 各自加载执行。双端命名/取值差异以 {node, py} 对象表达；函数型场景（lookup/verify）由各端测试以内联回调承载，本文件只固化期望值。",
+  "facades": {
+    "node": ["setRbac", "setExemptRoles", "setDenyWriteRoles", "setUnconfiguredPolicy"],
+    "py": ["set_rbac", "set_exempt_roles", "set_deny_write_roles", "set_unconfigured_policy"]
+  },
+  "skins": {
+    "first_wave": {
+      "store-api": { "node": "(req) => ctx|null", "py": "async (request) => ctx|None" },
+      "store-grpc": { "node": "(metadata) => ctx|null", "py": "async (invocation_metadata) => ctx|None" },
+      "store-graphql": { "node": "({request, serverContext}) => ctx|null", "py": "async (request) => ctx|None" }
+    },
+    "excluded": ["store-api:go", "store-api:rust", "store-graphql:go", "store-mcp:node", "store-mcp:py"]
+  },
+  "config": {
+    "full": {
+      "input": {
+        "policy": { "mode": "overlay", "roles": {}, "grants": [] },
+        "exemptRoles": ["super_admin"],
+        "denyWriteRoles": ["guest"],
+        "unconfiguredPolicy": "closed"
+      },
+      "expected_calls": [
+        ["setExemptRoles", ["super_admin"]],
+        ["setDenyWriteRoles", ["guest"]],
+        ["setUnconfiguredPolicy", "closed"],
+        ["setRbac", { "mode": "overlay", "roles": {}, "grants": [] }]
+      ]
+    },
+    "defaults": {
+      "input": {},
+      "expected_calls": [
+        ["setExemptRoles", []],
+        ["setDenyWriteRoles", []],
+        ["setUnconfiguredPolicy", "open"],
+        ["setRbac", null]
+      ]
+    },
+    "unknown_key": { "input": { "foo": 1 }, "error_contains": "foo", "expected_call_count": 0 },
+    "bad_unconfigured_policy": { "input": { "unconfiguredPolicy": "x" }, "error": true, "expected_call_count": 0 },
+    "bad_exempt_roles": { "input": { "exemptRoles": "a" }, "error": true, "expected_call_count": 0 }
+  },
+  "reload": { "expected_first_call": { "node": ["setRbac", null], "py": ["set_rbac", null] } },
+  "identity": {
+    "null_clear": [
+      { "kind": "jwt", "bag": {} },
+      { "kind": "api_key", "bag": {} },
+      { "kind": "session", "bag": {} }
+    ],
+    "jwt_payload": {
+      "claims": { "sub": "u1", "roles": ["editor"] },
+      "expected": { "userId": "u1", "roles": ["editor"] }
+    },
+    "jwt_roles_default": { "claims": { "sub": "u1" }, "expected": { "userId": "u1", "roles": [] } },
+    "invalid": {
+      "error_class": { "node": "Error", "py": "ValueError" },
+      "must_not_be_permission_error": true
+    },
+    "bag_lowercase": { "headers": { "Authorization": "Bearer t" }, "expected_bag_key": "authorization" },
+    "metas": {
+      "store-api": { "node": "req.headers", "py": "request.headers" },
+      "store-grpc": { "node": "call.metadata", "py": "invocation_metadata" },
+      "store-graphql": { "node": "{request, serverContext}.request.headers", "py": "request.headers" }
+    },
+    "unknown_skin": { "skin": "unknown", "error": true }
+  },
+  "machine_checks": {
+    "forbidden_literals": ["ERR_PERMISSION", "CONTEXT_ERROR", "UNAUTHENTICATED", "PERMISSION_DENIED", "401", "403"],
+    "forbidden_policy_keys": ["mode", "grants", "readFields", "writeFields", "ownerOnly", "condition"]
+  }
+}
