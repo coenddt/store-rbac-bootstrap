@@ -7,6 +7,7 @@
   "scripts": { "test": "node --test" },
   "keywords": ["nodejs-store", "rbac", "bootstrap", "contextProvider", "jwt", "skin"],
   "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/coenddt/store-rbac-bootstrap.git" },
   "engines": { "node": ">=18" },
   "dependencies": { "jsonwebtoken": "^9.0.0" },
   "peerDependencies": { "nodejs-store": ">=3.0.0" },
