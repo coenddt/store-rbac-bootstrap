@@ -8,7 +8,7 @@
 
 `store-rbac-bootstrap` 是 common-store 三层 API 皮肤（REST：store-api；GraphQL：store-graphql；gRPC：store-grpc）的**可选 RBAC 引导插件**，形态复刻 store-gateway（读配置 → 挂接各皮既有接缝），只做两件事：
 
-1. **策略引导**：读 bootstrap 配置 → 调宿主 store 既有 RBAC 配置门面（`setRbac` / `setExemptRoles` / `setDenyWriteRoles` / `setUnconfiguredPolicy`）；
+1. **策略引导**：读 bootstrap 配置 → 调宿主 store 既有 RBAC 配置门面（`setRbac` / `setExemptRoles` / `setDenyWriteRoles` / `setUnconfiguredPolicy`），并按接入方**注入**的 schema 定义（`opts.schemas`，可选；缺省不注册任何表）注册进宿主 store（`has` / `register`，幂等）；
 2. **身份源适配**：把 JWT / API-Key / Session 凭证解码为 `{userId, roles}` → 适配各皮既有 `contextProvider` 接缝。
 
 三条铁律：
@@ -16,6 +16,12 @@
 - **零判决**：插件不参与任何权限判定，不读取、不解释策略内容，只把配置原样搬运给宿主门面（判决在 core）；
 - **零语义发明**：不发明错误前缀 / 状态码，不解释策略内容键；插件只抛普通 `Error`，无凭证时返回 `null`；
 - **零回归**：不修改任何既有子仓（`store-api` / `store-grpc` / `store-graphql` / `store-mcp` / `store-gateway` / `nodejs-store` / `py-store` / `go-store` / `rust-store`），纯增量。
+
+**schema 归属（解耦）**：库**不内置权威 RBAC schema**。
+
+- **业务实体 schema**（业务表等）**一概不涉及**——数据的理解与结构由业务上层定义，库零定义、零占位；
+- **RBAC 管理面自身的存储 schema**（角色表 `__rbac_roles` / grant 表 `__rbac_grants`，属上层业务的持久化模型）**仅作可选参考定义**随包提供（`policy.schemas()`）；是否注册、注册哪套，由接入方经 `opts.schemas` 注入决定（缺省 `[]` → **不注册任何表**，DDL 与表模型全交业务/宿主）。
+- 插件**不建表**：`opts.schemas` 只把定义 `register` 进宿主 schema 注册表（供 store-api 复用自动生成的 CRUD 路由），**不触发 DDL**。
 
 ## 配置形状（node / py 同构）
 
@@ -41,6 +47,23 @@
 
 - `unconfiguredPolicy` 仅接受小写字符串，其余值 → 抛 `Error`；取值口径与宿主既有门面一致。
 
+### 构造参数（`policy.create` 的 opts；py 为入参）
+
+```jsonc
+{
+  "source": "<策略源函数，见下节「入口」>",                       // 必填
+  "schemas": [ "<schema 定义，见附录 A / policy.schemas()>" ]    // 可选；缺省 []（不注册任何表）
+}
+```
+
+| 字段 | 允许类型 / 取值 | 缺省 | 备注 |
+|---|---|---|---|
+| `source` | 函数 `() => object \| Promise<object>`（py：callable） | 无（必填） | 三策略源之一的产物 |
+| `schemas` | 数组 \| `null` \| `false` | `[]` | **注册进宿主的 schema 定义注入点**（库不内置权威 RBAC schema）。数组逐项须为对象且 `name` 非空字符串，按序 `has` / `register`（幂等）；`null` / `false` / 缺省 → **不注册任何表**（DDL 与表模型全交业务/宿主） |
+
+- py 端签名为 `policy.create(store, source, schemas=None)`（`source` 为位置参数、`schemas` 为可选关键字；语义与 node 的 `opts` 逐位一致）；
+- **条件化门面校验**：仅当 `schemas` 生效集非空时，才要求宿主具 `has` / `register`（向后兼容仅具 4 个 RBAC 门面的旧 store）。
+
 ## 引导规则
 
 ### 入口（node；py 为同构 snake_case）
@@ -53,8 +76,14 @@ policy.file(path)                 // 读本地文件 → JSON.parse；文件不�
 policy.url(url, { headers } = {}) // 远端策略分发服务 → fetch → JSON；非 2xx / JSON 非法 ⇒ 抛 Error
 policy.db(loader)                 // DB / 配置中心；loader: () => object | Promise<object>
 
-const handle = policy.create(store, { source });   // source 必填（上述三者之一的产物）
-await handle.start();      // 启动引导
+// 可选参考 RBAC 管理面定义（角色表 / grant 表，深拷贝）——库不据此强制注册，schema 归属上层业务
+policy.schemas()
+
+const handle = policy.create(store, {
+  source,                          // 必填（上述三者之一的产物）
+  schemas: policy.schemas(),       // 可选；缺省 [] → 不注册任何表
+});
+await handle.start();      // 启动引导 → { registered: string[], skipped: string[] }
 await handle.reload();     // 变更重注入
 ```
 
@@ -62,21 +91,25 @@ await handle.reload();     // 变更重注入
 
 1. `config = await source()` —— 读取失败**原样上抛**（不捕获、不静默跳过）；
 2. 校验 `config`：必须是普通对象；未知顶层键 → `Error`（消息列出未知键）；各字段按「配置形状」类型 / 取值校验 → 任一不符即 `Error`（**此时零门面调用**）；
-3. 应用（严格顺序）：
+3. 注册 `opts.schemas` 生效集（`has` / `register` **同步**调用，无 `await`；缺省 `[]` → 本步空转）：
+   `for (const defn of schemas) { store.has(defn.name) ? skipped.push(defn.name) : (store.register(defn), registered.push(defn.name)) }`；
+4. 应用（严格顺序）：
    1. `await store.setExemptRoles(config.exemptRoles ?? [])`
    2. `await store.setDenyWriteRoles(config.denyWriteRoles ?? [])`
    3. `await store.setUnconfiguredPolicy(config.unconfiguredPolicy ?? 'open')`
    4. `await store.setRbac(config.policy ?? null)` —— 策略**最后**生效
+5. 返回 `{ registered: string[], skipped: string[] }`（可观测，禁静默）。
 
 ### `reload()` 固定序列
 
 1. `await store.setRbac(null)` —— 先清除（等价「`setRbac(null)` + 重注入」）；
-2. 重跑 `start()` 的 1–3（重读源 + 重校验 + 按序重应用）。
+2. 重跑 `start()` 的 1–4（重读源 + 重校验 + 幂等重注册 schema + 按序重应用）。
 
 ### 构造期校验
 
 - `policy.create(store, opts)`：`store` 必填且具上述 4 个门面方法（缺任一 → `Error`，消息含缺失方法名）；`opts.source` 必须是函数（否则 → `Error`）；
-- `start()` / `reload()` **幂等**（可重复调用，重复调用等价再应用一次）。
+- `opts.schemas`（py `schemas`）缺省 `[]`；若给定须为数组（逐项为对象且 `name` 非空字符串）或 `null` / `false`，否则抛 `Error`（消息含 `schemas`）；**当且仅当**生效集非空时 `store` 须具 `has` / `register`（缺任一 → `Error`，消息含缺失方法名）；
+- `start()` / `reload()` **幂等**：重复调用等价再应用一次（schema 注册首轮 `registered`、次轮全 `skipped`；缺省 `[]` 时两轮均空）。
 
 ### 其它引导规则
 
@@ -161,3 +194,47 @@ await handle.reload();     // 变更重注入
 - 宿主包在 `package.json` / `pyproject.toml` 中**仅作 optional peer 兼容性声明**（`nodejs-store >=3.0.0` / `py-store >=3.0.0`），不产生运行时依赖；
 - **对皮肤层设计 §3.1 的收敛留痕**：设计预留「`PermissionError` 类可显式传入」的 optional-peer 手法；因插件**零判决、从不主动构造权限类错误**（无拒绝点），本期以更强约束「零宿主依赖」实现——接入方回调抛出的任何错误由插件原样上抛，分类责任在皮肤（各皮 spec 是唯一事实源）。此为**收敛而非扩大**；如后续出现插件主动拒绝的场景，再按设计 §3.1 启用 `errors` 传入点；
 - **JWT 依赖**：node `jsonwebtoken`（`^9`）、py `PyJWT`（`>=2.8`）——为插件自身依赖（非宿主）。
+- **schema 注入点用到的宿主门面**：`has` / `register`（py 同名）——属宿主既有 schema 注册表门面，非新增依赖；仅在 `opts.schemas` 生效集非空时被要求（见「构造参数」）。
+
+## 附录 A：RBAC 管理面参考定义（可选参考，非权威）
+
+> 声明：本附录为**可选参考**默认定义（开箱即用）；库**不据此强制注册**。`node/src/schemas.js` 与 `py/src/store_rbac_bootstrap/schemas.py` 须与本附录逐字一致（语义深比较全等），conformance 校验。是否注册由接入方经 `opts.schemas` 决定（缺省不注册）；**业务实体 schema 由业务自管，不在本附录（库不涉）**。
+> **字段依据**：core 策略模型 `rust-store/core/src/rbac.rs`（`RbacPolicy` / `Grant`——mode / roles / grants；grant 键 `role` / `model` / `actions` / `readFields` / `writeFields` / `ownerOnly` / `condition`）。表模型属**上层业务**，本附录仅为「用既有 schema + CRUD 自建管理面」的参考起点（对齐皮肤层设计 §5）。
+
+```json
+[
+  {
+    "name": "RbacRole", "collection": "__rbac_roles", "idPrefix": "rr", "timestamps": true,
+    "read": [], "write": [],
+    "fields": {
+      "_id":         { "type": "string" },
+      "name":        { "type": "string" },
+      "description": { "type": "string" }
+    },
+    "relations": {},
+    "indexes": [
+      { "keys": { "name": 1 }, "options": { "unique": true } }
+    ]
+  },
+  {
+    "name": "RbacGrant", "collection": "__rbac_grants", "idPrefix": "rg", "timestamps": true,
+    "read": [], "write": [],
+    "fields": {
+      "_id":         { "type": "string" },
+      "role":        { "type": "string" },
+      "model":       { "type": "string" },
+      "actions":     { "type": "array" },
+      "readFields":  { "type": "array" },
+      "writeFields": { "type": "array" },
+      "ownerOnly":   { "type": "boolean" },
+      "condition":   { "type": "object" }
+    },
+    "relations": {
+      "roleDef": { "model": "RbacRole", "type": "one", "localField": "role", "foreignField": "name", "read": [] }
+    },
+    "indexes": [
+      { "keys": { "role": 1, "model": 1 }, "options": { "unique": true } }
+    ]
+  }
+]
+```

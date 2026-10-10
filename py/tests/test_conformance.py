@@ -68,6 +68,28 @@ def test_conformance_reload_clear_first():
     assert store.calls[before] == tuple(CASES["reload"]["expected_first_call"]["py"])
 
 
+def test_conformance_schemas_optional_reference():
+    got = policy.schemas()
+    assert [d["name"] for d in got] == CASES["schemas"]["names"]
+    assert [d["collection"] for d in got] == CASES["schemas"]["collections"]
+    got[0]["name"] = "Mutated"                     # 深拷贝：调用方改写不得影响内部定义
+    assert policy.schemas()[0]["name"] == CASES["schemas"]["names"][0]
+
+
+def test_conformance_schemas_default_registers_nothing():
+    store = MockStore()
+    handle = policy.create(store, source_of({}))
+    assert run(handle.start()) == {"registered": [], "skipped": []}
+    assert store.registered_schemas == []
+
+
+def test_conformance_schemas_injection_idempotent():
+    store = MockStore()
+    handle = policy.create(store, source_of({}), schemas=policy.schemas())
+    assert run(handle.start()) == CASES["schemas"]["first_start"]
+    assert run(handle.start()) == CASES["schemas"]["second_start"]
+
+
 def test_conformance_null_clear():
     async def null_lookup(_):
         return None

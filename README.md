@@ -14,10 +14,12 @@ Optional **RBAC bootstrap plugin** for the three API skins of the common-store d
 
 The plugin does exactly two mappings and nothing else:
 
-1. **Policy bootstrap** — read a bootstrap config and call the host store's existing RBAC facades (`setRbac` + the built-in role-rule configs);
+1. **Policy bootstrap** — read a bootstrap config and call the host store's existing RBAC facades (`setRbac` + the built-in role-rule configs), registering the schema definitions **injected** by the integrator (`opts.schemas`, optional; by default registers no tables) into the host (`has` / `register`, idempotent);
 2. **Identity-source adaptation** — decode JWT / API-Key / Session credentials into `{userId, roles}` and plug them into each skin's existing `contextProvider` seam.
 
 Three invariants: **zero adjudication**, **zero semantic invention**, **zero regression**. The plugin never decides permissions, never reads/interprets policy content (it only carries it to `setRbac`), never invents error prefixes or status codes (it throws plain errors / returns `null`), and never touches any sibling repository. The single source of truth is [`spec/00-protocol.md`](./spec/00-protocol.md).
+
+**Schema ownership (decoupled)**: the library ships **no authoritative RBAC schema**. Business-entity schemas are entirely out of scope (defined by the upper business layer); the RBAC admin plane's own storage schemas (role table `__rbac_roles` / grant table `__rbac_grants`) are provided **only as optional reference definitions** (`policy.schemas()`) — whether and which set to register is decided by the integrator via `opts.schemas` injection (default `[]` → registers no tables). The plugin **does not create tables** (it only `register`s definitions into the host schema registry; no DDL is triggered).
 
 ## 2. Quick start
 
@@ -28,7 +30,11 @@ const { init, store } = require('nodejs-store');       // host store (provided b
 const { policy, identity } = require('store-rbac-bootstrap-node');
 
 // policy bootstrap: read config → apply to the host facades (validation before application)
-const handle = policy.create(store, { source: policy.file('./rbac.json') });
+// schemas is optional: inject the RBAC admin-plane reference definitions (default registers no tables; schema owned by the upper business layer)
+const handle = policy.create(store, {
+  source: policy.file('./rbac.json'),
+  schemas: policy.schemas(),        // optional; or supply your own definitions / omit
+});
 await handle.start();
 // await handle.reload();  // re-read the source and re-apply (setRbac(null) first)
 
@@ -45,7 +51,7 @@ from py_store import init, store                        # host store (provided b
 from store_rbac_bootstrap import policy, identity
 
 async def main():
-    handle = policy.create(store, policy.file("./rbac.json"))
+    handle = policy.create(store, policy.file("./rbac.json"), schemas=policy.schemas())  # schemas optional
     await handle.start()
     # await handle.reload()
 
@@ -68,6 +74,15 @@ asyncio.run(main())
 
 Only the four top-level keys above are allowed; any unknown key is a config error (throws, never silently ignored). `policy` content is fully opaque — the plugin never reads `mode` / `grants` / role names. See [`spec/00-protocol.md`](./spec/00-protocol.md) §Configuration / §Bootstrap rules for the full contract.
 
+### Constructor opts (`policy.create`)
+
+| Field | Allowed type / value | Default | Notes |
+|---|---|---|---|
+| `source` | function `() => object \| Promise<object>` (py: callable) | none (required) | the product of one of the three policy sources |
+| `schemas` | array \| `null` \| `false` | `[]` | schema injection point; each array entry must be an object with a non-empty string `name`, applied in order via idempotent `has` / `register`; `null` / `false` / absent → registers no tables |
+
+The py side is `policy.create(store, source, schemas=None)`; `policy.schemas()` returns the optional reference definitions (role table / grant table, **deep-copied**). The host must expose `has` / `register` only when the effective `schemas` set is non-empty (backward-compatible with older stores).
+
 ## 4. Per-skin hook table (first wave: 6)
 
 | Skin · Runtime | Hook signature | First wave |
@@ -89,7 +104,7 @@ Explicitly **excluded** in this phase (with rationale):
 
 | Excluded | Rationale |
 |---|---|
-| Admin plane (2nd phase, `__rbac_*` schemas + store-api CRUD) | design §5 — chicken-and-egg; an enhancement, not a prerequisite |
+| Admin plane API (2nd phase, self-built via store-api CRUD) | design §5 — chicken-and-egg; an enhancement, not a prerequisite. **Note**: the `__rbac_*` reference definitions and the `opts.schemas` injection point now ship in this phase (schema owned by the upper business layer, see §1) |
 | go runtimes (store-api go / store-graphql go) | design §6.3 |
 | store-mcp (node / py) | design §2.5 — anchored on the gateway's fourth switch |
 | store-api rust | design §2.5 — first wave is node / py only |

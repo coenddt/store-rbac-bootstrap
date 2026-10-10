@@ -41,6 +41,14 @@
     "bad_exempt_roles": { "input": { "exemptRoles": "a" }, "error": true, "expected_call_count": 0 }
   },
   "reload": { "expected_first_call": { "node": ["setRbac", null], "py": ["set_rbac", null] } },
+  "schemas": {
+    "comment": "可选参考 RBAC 管理面定义（两表）+ opts.schemas 注入点；缺省不注册任何表，schema 归属上层业务。",
+    "names": ["RbacRole", "RbacGrant"],
+    "collections": ["__rbac_roles", "__rbac_grants"],
+    "default_registers_nothing": true,
+    "first_start": { "registered": ["RbacRole", "RbacGrant"], "skipped": [] },
+    "second_start": { "registered": [], "skipped": ["RbacRole", "RbacGrant"] }
+  },
   "identity": {
     "null_clear": [
       { "kind": "jwt", "bag": {} },

@@ -55,6 +55,28 @@ test('conformance · reload 首调用为清除前置', async () => {
   assert.deepEqual(store.calls[before], cases.reload.expected_first_call.node);
 });
 
+test('conformance · schemas() 可选参考定义（名称 / 集合 / 深拷贝）', () => {
+  const got = policy.schemas();
+  assert.deepEqual(got.map((d) => d.name), cases.schemas.names);
+  assert.deepEqual(got.map((d) => d.collection), cases.schemas.collections);
+  got[0].name = 'Mutated';                              // 深拷贝：调用方改写不得影响内部定义
+  assert.equal(policy.schemas()[0].name, cases.schemas.names[0]);
+});
+
+test('conformance · opts.schemas 缺省不注册任何表', async () => {
+  const store = mockStore();
+  const handle = policy.create(store, { source: sourceOf({}) });
+  assert.deepEqual(await handle.start(), { registered: [], skipped: [] });
+  assert.deepEqual(store.registeredSchemas, []);
+});
+
+test('conformance · opts.schemas 注入幂等注册（二次 start 全 skipped）', async () => {
+  const store = mockStore();
+  const handle = policy.create(store, { source: sourceOf({}), schemas: policy.schemas() });
+  assert.deepEqual(await handle.start(), cases.schemas.first_start);
+  assert.deepEqual(await handle.start(), cases.schemas.second_start);
+});
+
 test('conformance · null_clear 三解码器空 bag 严格 null', async () => {
   const decoders = {
     jwt: identity.jwt({ secret: SECRET }),

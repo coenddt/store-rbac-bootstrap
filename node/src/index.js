@@ -4,11 +4,14 @@
 const fs = require('fs');
 const jwt = require('jsonwebtoken');
 
+const { RBAC_SCHEMAS } = require('./schemas');
+
 const ALLOWED_KEYS = ['policy', 'exemptRoles', 'denyWriteRoles', 'unconfiguredPolicy'];
 const FACADES = ['setRbac', 'setExemptRoles', 'setDenyWriteRoles', 'setUnconfiguredPolicy'];
 
 /* ------------------------------------------------------------------ *
  * policy：策略引导（读 bootstrap 配置 → 调 store 既有门面）
+ *         + schema 注入点（可选参考定义 → 宿主 register；schema 归属上层业务）
  * ------------------------------------------------------------------ */
 
 /** 策略源 ①：本地文件 → JSON.parse；文件不存在 / JSON 非法 ⇒ 抛 Error */
@@ -49,6 +52,11 @@ function validate(config) {
   }
 }
 
+/** 内置「可选参考」RBAC 管理面定义（两表，深拷贝）——库不据此强制注册，schema 归属上层业务 */
+function schemas() {
+  return RBAC_SCHEMAS.map((defn) => JSON.parse(JSON.stringify(defn)));
+}
+
 /** 构造引导句柄；构造期校验 store 门面齐备 + source 为函数 */
 function create(store, opts) {
   if (!store || typeof store !== 'object') throw new Error('policy.create 需要 store 实例');
@@ -57,18 +65,55 @@ function create(store, opts) {
   }
   if (!opts || typeof opts.source !== 'function') throw new Error('policy.create 需要 opts.source（策略源函数）');
 
+  // schemas：要注册进宿主的定义注入点（库不内置权威 RBAC schema）——
+  // 缺省 / null / false → 不注册任何表；数组 → 逐项校验后按序注册
+  const schemasOpt = opts.schemas === undefined ? [] : opts.schemas;
+  let effectiveSchemas;
+  if (schemasOpt === null || schemasOpt === false) {
+    effectiveSchemas = [];
+  } else if (Array.isArray(schemasOpt)) {
+    schemasOpt.forEach((defn, i) => {
+      if (defn === null || typeof defn !== 'object') {
+        throw new Error(`policy.create: schemas[${i}] 须为对象`);
+      }
+      if (typeof defn.name !== 'string' || defn.name === '') {
+        throw new Error(`policy.create: schemas[${i}].name 须为非空字符串`);
+      }
+    });
+    effectiveSchemas = JSON.parse(JSON.stringify(schemasOpt));
+  } else {
+    throw new Error('policy.create: schemas 须为数组、null 或 false');
+  }
+  // 条件化门面校验：仅当有 schema 需要注册时才要求宿主门面（向后兼容旧 store）
+  if (effectiveSchemas.length > 0) {
+    for (const name of ['has', 'register']) {
+      if (typeof store[name] !== 'function') throw new Error(`store 缺少门面方法: ${name}`);
+    }
+  }
+
   async function start() {
     const config = await opts.source();      // 读取失败原样上抛（不吞错）
-    validate(config);                        // 校验先于应用
+    validate(config);                        // 校验先于应用（此时零门面调用）
+    const registered = [];
+    const skipped = [];
+    for (const defn of effectiveSchemas) {
+      if (store.has(defn.name)) {            // has 为同步门面
+        skipped.push(defn.name);
+      } else {
+        store.register(defn);                // register 为同步门面，幂等
+        registered.push(defn.name);
+      }
+    }
     await store.setExemptRoles(config.exemptRoles ?? []);            // ① 角色清单
     await store.setDenyWriteRoles(config.denyWriteRoles ?? []);      // ② 拒写清单
     await store.setUnconfiguredPolicy(config.unconfiguredPolicy ?? 'open'); // ③ 未配置姿态
     await store.setRbac(config.policy ?? null);                      // ④ 策略最后生效（core 解析期 fail-fast，不捕获）
+    return { registered, skipped };
   }
 
   async function reload() {
     await store.setRbac(null);               // 先清除，再重注入
-    await start();
+    return start();
   }
 
   return { start, reload };
@@ -199,4 +244,4 @@ const identity = {
   jwt: jwtFactory, apiKey: apiKeyFactory, session: sessionFactory, adapt,
 };
 
-module.exports = { policy: { file, url, db, create }, identity };
+module.exports = { policy: { file, url, db, schemas, create }, identity };

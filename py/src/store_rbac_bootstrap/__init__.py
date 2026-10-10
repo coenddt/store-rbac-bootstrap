@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import copy
 import inspect
 import json
 import urllib.request
@@ -11,6 +12,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import jwt as _jwt  # PyJWT
+
+from .schemas import RBAC_SCHEMAS
 
 _ALLOWED_KEYS = ("policy", "exemptRoles", "denyWriteRoles", "unconfiguredPolicy")
 _FACADES = ("set_rbac", "set_exempt_roles", "set_deny_write_roles", "set_unconfigured_policy")
@@ -64,24 +67,39 @@ def _validate(config):
 
 
 class _Handle:
-    def __init__(self, store, source):
+    def __init__(self, store, source, schemas):
         self._store = store
         self._source = source
+        self._schemas = schemas
 
     async def start(self):
         config = await self._source()              # 读取失败原样上抛（不吞错）
-        _validate(config)                          # 校验先于应用
+        _validate(config)                          # 校验先于应用（此时零门面调用）
+        registered = []
+        skipped = []
+        for defn in self._schemas:
+            if self._store.has(defn["name"]):      # has 为同步门面
+                skipped.append(defn["name"])
+            else:
+                self._store.register(defn)         # register 为同步门面，幂等
+                registered.append(defn["name"])
         await _call(self._store.set_exempt_roles, config.get("exemptRoles", []))
         await _call(self._store.set_deny_write_roles, config.get("denyWriteRoles", []))
         await _call(self._store.set_unconfigured_policy, config.get("unconfiguredPolicy", "open"))
         await _call(self._store.set_rbac, config.get("policy", None))   # 策略最后生效
+        return {"registered": registered, "skipped": skipped}
 
     async def reload(self):
         await _call(self._store.set_rbac, None)    # 先清除，再重注入
-        await self.start()
+        return await self.start()
 
 
-def create(store, source):
+def schemas():
+    """内置「可选参考」RBAC 管理面定义（两表，深拷贝）——库不据此强制注册，schema 归属上层业务。"""
+    return copy.deepcopy(RBAC_SCHEMAS)
+
+
+def create(store, source, schemas=None):
     if store is None:
         raise ValueError("policy.create 需要 store 实例")
     for name in _FACADES:
@@ -89,10 +107,31 @@ def create(store, source):
             raise ValueError(f"store 缺少门面方法: {name}")
     if not callable(source):
         raise ValueError("policy.create 需要 source（策略源函数）")
-    return _Handle(store, source)
+
+    # schemas：要注册进宿主的定义注入点（库不内置权威 RBAC schema）——
+    # 缺省 / None / False → 不注册任何表；列表 → 逐项校验后按序注册
+    if schemas is None or schemas is False:
+        effective_schemas = []
+    elif isinstance(schemas, list):
+        for i, defn in enumerate(schemas):
+            if not isinstance(defn, dict):
+                raise ValueError(f"policy.create: schemas[{i}] 须为对象")
+            name = defn.get("name")
+            if not isinstance(name, str) or name == "":
+                raise ValueError(f"policy.create: schemas[{i}].name 须为非空字符串")
+        effective_schemas = copy.deepcopy(schemas)
+    else:
+        raise ValueError("policy.create: schemas 须为数组、null 或 false")
+    # 条件化门面校验：仅当有 schema 需要注册时才要求宿主门面（向后兼容旧 store）
+    if len(effective_schemas) > 0:
+        for name in ("has", "register"):
+            if not callable(getattr(store, name, None)):
+                raise ValueError(f"store 缺少门面方法: {name}")
+
+    return _Handle(store, source, effective_schemas)
 
 
-policy = SimpleNamespace(file=file, url=url, db=db, create=create)
+policy = SimpleNamespace(file=file, url=url, db=db, schemas=schemas, create=create)
 
 # ------------------------------------------------------------------ #
 # identity：身份源适配（凭证 → {userId, roles} → 各皮 context_provider 接缝）
