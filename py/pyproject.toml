@@ -1,6 +1,6 @@
 [project]
 name = "store-rbac-bootstrap-py"
-version = "0.1.1"
+version = "0.2.0"
 description = "Optional skin-layer bootstrap for common-store RBAC: policy bootstrap (set_rbac + role-rule configs) and credential-to-context factories (JWT / API-Key / Session) for the context_provider seams of store-api / store-grpc / store-graphql"
 requires-python = ">=3.10"
 license = { text = "MIT" }

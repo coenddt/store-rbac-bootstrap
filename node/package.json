@@ -1,6 +1,6 @@
 {
   "name": "store-rbac-bootstrap-node",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Optional skin-layer bootstrap for common-store RBAC: policy bootstrap (setRbac + role-rule configs) and credential-to-context factories (JWT / API-Key / Session) for the contextProvider seams of store-api / store-grpc / store-graphql",
   "main": "src/index.js",
   "files": [
