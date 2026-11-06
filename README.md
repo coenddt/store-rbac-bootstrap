@@ -6,9 +6,11 @@
 ![npm](https://img.shields.io/npm/v/store-rbac-bootstrap-node.svg)
 ![PyPI](https://img.shields.io/pypi/v/store-rbac-bootstrap-py.svg)
 
-- Two isomorphic runtimes at **0.2.2**: `store-rbac-bootstrap-node` and `store-rbac-bootstrap-py`.
+- Two isomorphic runtimes at **0.2.3**: `store-rbac-bootstrap-node` and `store-rbac-bootstrap-py`.
 - Four host facades, three skins, six context hooks — no per-skin authorization code.
 - The policy is carried verbatim to rust-store; this package never reads or interprets it.
+
+> Chinese docs: [README.zh-CN.md](./README.zh-CN.md)
 
 ## Three doors, three versions of "who is calling"
 
@@ -39,7 +41,7 @@ Two mappings, deliberately nothing more:
 | Node | `store-rbac-bootstrap-node` | `npm i store-rbac-bootstrap-node` | `require('store-rbac-bootstrap-node')` | Node >= 18 |
 | Python | `store-rbac-bootstrap-py` | `pip install store-rbac-bootstrap-py` | `import store_rbac_bootstrap` | Python >= 3.10 |
 
-Both are version **0.2.2** and implement the same protocol from [`spec/00-protocol.md`](./spec/00-protocol.md). Own dependencies are only `jsonwebtoken ^9` (Node) and `PyJWT >= 2.8` (Python). The host store is declared as an **optional peer** (`nodejs-store >= 3.0.0` / `py-store >= 3.0.0`) — there is no runtime dependency on it, because the integrator passes the store instance in.
+Both are version **0.2.3** and implement the same protocol from [`spec/00-protocol.md`](./spec/00-protocol.md). Own dependencies are only `jsonwebtoken ^9` (Node) and `PyJWT >= 2.8` (Python). The host store is declared as an **optional peer** (`nodejs-store >= 3.0.0` / `py-store >= 3.0.0`) — there is no runtime dependency on it, because the integrator passes the store instance in.
 
 ## Key mechanisms
 
